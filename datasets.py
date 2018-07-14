@@ -1,5 +1,6 @@
 import os
 import csv
+import json
 import numpy as np
 
 from tqdm import tqdm
@@ -27,6 +28,18 @@ def _rocstories(path):
                 y.append(int(line[-1])-1)
         return st, ct1, ct2, y
 
+def read_pws(path):
+    with open(path) as f:
+        prems = []
+        hyps = []
+        y = []
+        for line in f:
+            example = json.loads(line.strip())
+            prems.append(example['sentence1'])
+            hyps.append(example['sentence2'])
+            y.append(int(example['bin_label']))
+        return prems, hyps, y
+
 def rocstories(data_dir, n_train=1497, n_valid=374):
     storys, comps1, comps2, ys = _rocstories(os.path.join(data_dir, 'cloze_test_val__spring2016 - cloze_test_ALL_val.csv'))
     teX1, teX2, teX3, _ = _rocstories(os.path.join(data_dir, 'cloze_test_test__spring2016 - cloze_test_ALL_test.csv'))
@@ -49,3 +62,12 @@ def rocstories(data_dir, n_train=1497, n_valid=374):
     trY = np.asarray(trY, dtype=np.int32)
     vaY = np.asarray(vaY, dtype=np.int32)
     return (trX1, trX2, trX3, trY), (vaX1, vaX2, vaX3, vaY), (teX1, teX2, teX3)
+
+def pw(data_dir):
+    tr_prems, tr_hyps, trY = read_pws(os.path.join(data_dir, 'snli_style_train_feats.jsonl'))
+    dv_prems, dv_hyps, dvY = read_pws(os.path.join(data_dir, 'snli_style_dev_feats.jsonl'))
+    te_prems, te_hyps, teY = read_pws(os.path.join(data_dir, 'snli_style_test_feats.jsonl'))
+    trY = np.asarray(trY, dtype=np.int32)
+    dvY = np.asarray(dvY, dtype=np.int32)
+    teY = np.asarray(teY, dtype=np.int32)
+    return (tr_prems, tr_hyps, trY), (dv_prems, dv_hyps, dvY), (te_prems, te_hyps, teY)

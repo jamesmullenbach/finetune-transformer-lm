@@ -16,3 +16,6 @@ def rocstories(data_dir, pred_path, log_path):
     valid_accuracy = logs[best_validation_index]['va_acc']
     print('ROCStories Valid Accuracy: %.2f'%(valid_accuracy))
     print('ROCStories Test Accuracy:  %.2f'%(test_accuracy))
+
+def pw(data_dir, pred_path, log_path):
+    pass
