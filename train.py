@@ -194,32 +194,25 @@ def model_pw(X, M, Y, train=False, reuse=False):
         lm_losses = tf.reshape(lm_losses, [shape_list(X)[0], shape_list(X)[1]-1])
         lm_losses = tf.reduce_sum(lm_losses*M[:, 1:], 1)/tf.reduce_sum(M[:, 1:], 1)
 
+        clf_h = tf.reshape(h, [-1, n_embd])
         #get length of each example
         pool_idx = tf.cast(tf.argmax(tf.cast(tf.equal(X[:, :, 0], clf_token), tf.float32), 1), tf.int32)
-        #IDK what's going on here...
-        print("no reshape output of transformer", shape_list(h))
-        clf_h = tf.gather(h, tf.range(shape_list(X)[0], dtype=tf.int32)*n_ctx+pool_idx)
-        print("after gather", shape_list(clf_h))
+        #just takes the state of the transformer at the end of the input, I think?
+        clf_h = tf.gather(clf_h, tf.range(shape_list(X)[0], dtype=tf.int32)*n_ctx+pool_idx)
 
         #reshape to [batch, embed size]
         clf_h = tf.reshape(clf_h, [-1, 1, n_embd])
-        print("reshape after gather", shape_list(clf_h))
         if train and clf_pdrop > 0:
             shape = shape_list(clf_h)
             shape[1] = 1
             clf_h = tf.nn.dropout(clf_h, 1-clf_pdrop, shape)
         #put tensor back into (batch, embed size) shape
-        print("dropout", shape_list(clf_h))
         clf_h = tf.reshape(clf_h, [-1, n_embd])
-        print("reshape after dropout", shape_list(clf_h))
         #linear layer
         clf_logits = clf_pw(clf_h, train=train)
 
         #final softmax
-        print("clf logits - after classifier", shape_list(clf_logits))
-        print("Y", shape_list(Y))
         clf_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=clf_logits, labels=Y)
-        print("got here")
 
         return clf_logits, clf_losses, lm_losses
 
@@ -260,32 +253,24 @@ def model_roc(X, M, Y, train=False, reuse=False):
         #finally, cast to int32
         #I think this is just getting the length of each example in batch
         pool_idx = tf.cast(tf.argmax(tf.cast(tf.equal(X[:, :, 0], clf_token), tf.float32), 1), tf.int32)
-        #IDK what's going on here...
-        print("reshape output of transformer", shape_list(clf_h)) #[batch*n_answers*n_ctx, n_embd]
+        #just takes the state of the transformer at the end of the input, I think?
         clf_h = tf.gather(clf_h, tf.range(shape_list(X)[0], dtype=tf.int32)*n_ctx+pool_idx)
-        print("after gather", shape_list(clf_h)) #[batch*n_answers, n_embd
 
         #reshape to [batch, n_answers, embed size]
         clf_h = tf.reshape(clf_h, [-1, 2, n_embd])
-        print("reshape after gather", shape_list(clf_h)) #[batch, n_answers, n_embd]
         if train and clf_pdrop > 0:
             shape = shape_list(clf_h)
             shape[1] = 1
             clf_h = tf.nn.dropout(clf_h, 1-clf_pdrop, shape)
         #put tensor back into (batch*n_answers, embed size) shape
-        print("dropout", shape_list(clf_h)) #[batch, n_answers, n_embd]
         clf_h = tf.reshape(clf_h, [-1, n_embd])
-        print("reshape after dropout", shape_list(clf_h)) #[batch*n_answers, n_embd]
         #linear layer
         clf_logits = clf(clf_h, 1, train=train)
         #reshape to [batch, n_answers]
         clf_logits = tf.reshape(clf_logits, [-1, 2])
 
         #final softmax
-        print("clf logits - after classifier", shape_list(clf_logits)) #[batch, n_answers]
-        print("Y", shape_list(Y)) #[batch]
         clf_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=clf_logits, labels=Y)
-        print("got here")
 
         return clf_logits, clf_losses, lm_losses
 
@@ -560,7 +545,6 @@ if __name__ == '__main__':
         Y_train = tf.placeholder(tf.int32, [n_batch_train])
         Y = tf.placeholder(tf.int32, [None])
 
-    import pdb; pdb.set_trace()
     #train setup
     train, logits, clf_losses, lm_losses = mgpu_train(X_train, M_train, Y_train, dataset=args.dataset)
     clf_loss = tf.reduce_mean(clf_losses)
