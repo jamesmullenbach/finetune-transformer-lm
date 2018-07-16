@@ -163,16 +163,17 @@ def clf(x, ny, w_init=tf.random_normal_initializer(stddev=0.02), b_init=tf.const
         b = tf.get_variable("b", [ny], initializer=b_init)
         return tf.matmul(x, w)+b
 
-def clf_pw(x, w_init=tf.random_normal_initializer(stddev=0.02), b_init=tf.constant_initializer(0), train=False):
+def clf_pw(x, w_init=tf.random_normal_initializer(stddev=0.02), b_init=tf.constant_initializer(0), train=False, ordinal=False):
+    out_sz = 5 if ordinal else 2
     #final linear layer, for single input
     with tf.variable_scope('clf_pw'):
         nx = shape_list(x)[-1]
-        w = tf.get_variable('w', [nx, 2], initializer=w_init)
-        b = tf.get_variable('b', [2], initializer=b_init)
+        w = tf.get_variable('w', [nx, out_sz], initializer=w_init)
+        b = tf.get_variable('b', [out_sz], initializer=b_init)
         return tf.matmul(x, w)+b
 
 #MAIN MODELS
-def model_pw(X, M, Y, train=False, reuse=False):
+def model_pw(X, M, Y, train=False, reuse=False, ordinal=False):
     """
         X: [batch, n_ctx, 2]
         M: [batch, n_ctx]
@@ -209,7 +210,7 @@ def model_pw(X, M, Y, train=False, reuse=False):
         #put tensor back into (batch, embed size) shape
         clf_h = tf.reshape(clf_h, [-1, n_embd])
         #linear layer
-        clf_logits = clf_pw(clf_h, train=train)
+        clf_logits = clf_pw(clf_h, train=train, ordinal=ordinal)
 
         #final softmax
         clf_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=clf_logits, labels=Y)
@@ -284,7 +285,7 @@ def mgpu_train(*xs, **kwargs):
             if dataset == 'rocstories':
                 clf_logits, clf_losses, lm_losses = model_roc(*xs, train=True, reuse=do_reuse)
             elif dataset == 'pw':
-                clf_logits, clf_losses, lm_losses = model_pw(*xs, train=True, reuse=do_reuse)
+                clf_logits, clf_losses, lm_losses = model_pw(*xs, train=True, reuse=do_reuse, ordinal=ordinal)
             if lm_coef > 0:
                 train_loss = tf.reduce_mean(clf_losses) + lm_coef*tf.reduce_mean(lm_losses)
             else:
@@ -308,7 +309,7 @@ def mgpu_predict(*xs, **kwargs):
             if dataset == 'rocstories':
                 clf_logits, clf_losses, lm_losses = model_roc(*xs, train=False, reuse=True)
             elif dataset == 'pw':
-                clf_logits, clf_losses, lm_losses = model_pw(*xs, train=False, reuse=True)
+                clf_logits, clf_losses, lm_losses = model_pw(*xs, train=False, reuse=True, ordinal=ordinal)
             gpu_ops.append([clf_logits, clf_losses, lm_losses])
     ops = [tf.concat(op, 0) for op in zip(*gpu_ops)]
     return ops
@@ -410,21 +411,32 @@ argmax = lambda x:np.argmax(x, 1)
 
 pred_fns = {
     'rocstories':argmax,
+    'pw': argmax
 }
 
 filenames = {
     'rocstories':'ROCStories.tsv',
+    'pw': 'pw_preds.tsv'
 }
 
 label_decoders = {
     'rocstories':None,
+    'pw': None
 }
 
-def predict():
+analyses = {
+    'rocstories': rocstories_analysis,
+    'pw': pw_analysis
+ }
+
+def predict(test):
     filename = filenames[dataset]
     pred_fn = pred_fns[dataset]
     label_decoder = label_decoders[dataset]
-    predictions = pred_fn(iter_predict(teX, teM))
+    if test:
+        predictions = pred_fn(iter_predict(teX, teM))
+    else:
+        predictions = pred_fn(iter_predict(vaX, vaM))
     if label_decoder is not None:
         predictions = [label_decoder[prediction] for prediction in predictions]
     path = os.path.join(submission_dir, filename)
@@ -444,6 +456,8 @@ if __name__ == '__main__':
     parser.add_argument('--submission_dir', type=str, default='submission/')
     parser.add_argument('--submit',         action='store_true', help="flag to get test predictions")
     parser.add_argument('--analysis',       action='store_true', help="flag to run analysis")
+    parser.add_argument('--ordinal',        action='store_true', help="flag to do 5-class prediction instead of binary")
+    parser.add_argument('--test',           action='store_true', help="flag to run on test")
     parser.add_argument('--seed',           type=int, default=42)
     parser.add_argument('--n_iter',         type=int, default=3, help="epochs of finetuning")
     parser.add_argument('--n_batch',        type=int, default=8, help="number in batch per gpu")
@@ -479,7 +493,8 @@ if __name__ == '__main__':
     np.random.seed(seed)
     tf.set_random_seed(seed)
 
-    logger = ResultLogger(path=os.path.join(log_dir, '{}.jsonl'.format(desc)), **args.__dict__)
+    log_file = os.path.join(log_dir, '{}.jsonl'.format(desc))
+    logger = ResultLogger(path=log_file, **args.__dict__)
     # formatting stuff
     text_encoder = TextEncoder(encoder_path, bpe_path)
     encoder = text_encoder.encoder
@@ -488,9 +503,8 @@ if __name__ == '__main__':
     if args.dataset == 'rocstories':
         (trX1, trX2, trX3, trY), (vaX1, vaX2, vaX3, vaY), (teX1, teX2, teX3) = encode_dataset(rocstories(data_dir), encoder=text_encoder)
     elif args.dataset == 'pw':
-        (trX1, trX2, trY), (vaX1, vaX2, vaY), (teX1, teX2, teY) = encode_dataset(pw(data_dir), encoder=text_encoder)
+        (trX1, trX2, trY), (vaX1, vaX2, vaY), (teX1, teX2, teY) = encode_dataset(pw(data_dir, args.ordinal), encoder=text_encoder)
     #output: unpadded lists of word indices
-    n_y = 2
     #special tokens
     encoder['_start_'] = len(encoder)
     encoder['_delimiter_'] = len(encoder)
@@ -509,7 +523,6 @@ if __name__ == '__main__':
     elif args.dataset == 'pw':
         n_ctx = min(max([len(x1[:max_len])+len(x2[:max_len]) for x1, x2 in zip(trX1, trX2)]+[len(x1[:max_len])+len(x2[:max_len]) for x1, x2 in zip(vaX1, vaX2)]+[len(x1[:max_len])+len(x2[:max_len]) for x1, x2 in zip(teX1, teX2)])+n_special, n_ctx)
 
-    #TODO
     if args.dataset == 'rocstories':
         trX, trM = transform_roc(trX1, trX2, trX3)
         vaX, vaM = transform_roc(vaX1, vaX2, vaX3)
@@ -546,7 +559,7 @@ if __name__ == '__main__':
         Y = tf.placeholder(tf.int32, [None])
 
     #train setup
-    train, logits, clf_losses, lm_losses = mgpu_train(X_train, M_train, Y_train, dataset=args.dataset)
+    train, logits, clf_losses, lm_losses = mgpu_train(X_train, M_train, Y_train, dataset=args.dataset, ordinal=args.ordinal)
     clf_loss = tf.reduce_mean(clf_losses)
 
     params = find_trainable_variables('model')
@@ -570,11 +583,11 @@ if __name__ == '__main__':
     sess.run([p.assign(ip) for p, ip in zip(params[:n_transfer], init_params[:n_transfer])])
 
     #more setup
-    eval_mgpu_logits, eval_mgpu_clf_losses, eval_mgpu_lm_losses = mgpu_predict(X_train, M_train, Y_train, dataset=args.dataset)
+    eval_mgpu_logits, eval_mgpu_clf_losses, eval_mgpu_lm_losses = mgpu_predict(X_train, M_train, Y_train, dataset=args.dataset, ordinal=args.ordinal)
     if args.dataset == 'rocstories':
         eval_logits, eval_clf_losses, eval_lm_losses = model_roc(X, M, Y, train=False, reuse=True)
     elif args.dataset == 'pw':
-        eval_logits, eval_clf_losses, eval_lm_losses = model_pw(X, M, Y, train=False, reuse=True)
+        eval_logits, eval_clf_losses, eval_lm_losses = model_pw(X, M, Y, train=False, reuse=True, ordinal=args.ordinal)
     eval_clf_loss = tf.reduce_mean(eval_clf_losses)
     eval_mgpu_clf_loss = tf.reduce_mean(eval_mgpu_clf_losses)
 
@@ -598,6 +611,7 @@ if __name__ == '__main__':
     # for ROC submission
     if submit:
         sess.run([p.assign(ip) for p, ip in zip(params, joblib.load(os.path.join(save_dir, desc, 'best_params.jl')))])
-        predict()
+        predict(args.test)
         if analysis:
-            rocstories_analysis(data_dir, os.path.join(submission_dir, 'ROCStories.tsv'), os.path.join(log_dir, 'rocstories.jsonl'))
+            analy_fn = analyses[dataset]
+            analy_fn(data_dir, os.path.join(submission_dir, filenames[dataset]), os.path.join(log_dir, log_file), test=args.test, ordinal=args.ordinal)
