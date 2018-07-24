@@ -290,7 +290,8 @@ def mgpu_train(*xs, **kwargs):
                 train_loss = tf.reduce_mean(clf_losses) + lm_coef*tf.reduce_mean(lm_losses)
             else:
                 train_loss = tf.reduce_mean(clf_losses)
-            params = find_trainable_variables("model")
+            params = find_trainable_variables("model/clf" if freeze_lm else "model")
+            print(params)
             grads = tf.gradients(train_loss, params)
             grads = list(zip(grads, params))
             gpu_grads.append(grads)
@@ -427,7 +428,7 @@ label_decoders = {
 analyses = {
     'rocstories': rocstories_analysis,
     'pw': pw_analysis
- }
+}
 
 def predict(test):
     filename = filenames[dataset]
@@ -458,6 +459,7 @@ if __name__ == '__main__':
     parser.add_argument('--analysis',       action='store_true', help="flag to run analysis")
     parser.add_argument('--ordinal',        action='store_true', help="flag to do 5-class prediction instead of binary")
     parser.add_argument('--test',           action='store_true', help="flag to run on test")
+    parser.add_argument('--freeze_lm',      action='store_true', help="flag to freeze (not update) LM weights - only train the classifier")
     parser.add_argument('--seed',           type=int, default=42)
     parser.add_argument('--n_iter',         type=int, default=3, help="epochs of finetuning")
     parser.add_argument('--n_batch',        type=int, default=8, help="number in batch per gpu")
@@ -563,7 +565,9 @@ if __name__ == '__main__':
     clf_loss = tf.reduce_mean(clf_losses)
 
     params = find_trainable_variables('model')
-    sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
+    config = tf.ConfigProto(allow_soft_placement=True)
+    config.gpu_options.allow_growth = True
+    sess = tf.Session(config=config)
     sess.run(tf.global_variables_initializer())
 
     #load saved params
