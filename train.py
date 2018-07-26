@@ -431,7 +431,7 @@ analyses = {
 }
 
 def predict(test):
-    filename = filenames[dataset]
+    filename = filenames[dataset].replace('.tsv', f"_{exec_time}.tsv")
     pred_fn = pred_fns[dataset]
     label_decoder = label_decoders[dataset]
     if test:
@@ -440,7 +440,7 @@ def predict(test):
         predictions = pred_fn(iter_predict(vaX, vaM))
     if label_decoder is not None:
         predictions = [label_decoder[prediction] for prediction in predictions]
-    path = os.path.join(submission_dir, filename)
+    path = os.path.join(submission_dir, filename, str(round(time.time())))
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w') as f:
         f.write('{}\t{}\n'.format('index', 'prediction'))
@@ -454,6 +454,7 @@ if __name__ == '__main__':
     parser.add_argument('--log_dir',        type=str, default='log/')
     parser.add_argument('--save_dir',       type=str, default='save/')
     parser.add_argument('--data_dir',       type=str, default='data/')
+    parser.add_argument('--params_path',    type=str, default='model/params_shapes.json', help="path to .jl params file if using previously finetuned params")
     parser.add_argument('--submission_dir', type=str, default='submission/')
     parser.add_argument('--submit',         action='store_true', help="flag to get test predictions")
     parser.add_argument('--analysis',       action='store_true', help="flag to run analysis")
@@ -482,13 +483,14 @@ if __name__ == '__main__':
     parser.add_argument('--lr_schedule',    type=str, default='warmup_linear')
     parser.add_argument('--encoder_path',   type=str, default='model/encoder_bpe_40000.json')
     parser.add_argument('--bpe_path',       type=str, default='model/vocab_40000.bpe')
-    parser.add_argument('--n_transfer',     type=int, default=12, help="transformer blocks to keep fixed (default to all)")
+    parser.add_argument('--n_transfer',     type=int, default=12, help="transformer blocks to train (default to all)")
     parser.add_argument('--lm_coef',        type=float, default=0.5)
     parser.add_argument('--b1',             type=float, default=0.9)
     parser.add_argument('--b2',             type=float, default=0.999)
     parser.add_argument('--e',              type=float, default=1e-8)
 
     args = parser.parse_args()
+    args.exec_time = time.strftime('%b_%d_%H:%M:%S', time.localtime())
     print(args)
     globals().update(args.__dict__)
     random.seed(seed)
@@ -501,6 +503,8 @@ if __name__ == '__main__':
     text_encoder = TextEncoder(encoder_path, bpe_path)
     encoder = text_encoder.encoder
     n_vocab = len(text_encoder.encoder)
+
+    save_dir += '_' + args.exec_time
 
     if args.dataset == 'rocstories':
         (trX1, trX2, trX3, trY), (vaX1, vaX2, vaX3, vaY), (teX1, teX2, teX3) = encode_dataset(rocstories(data_dir), encoder=text_encoder)
@@ -571,20 +575,23 @@ if __name__ == '__main__':
     sess.run(tf.global_variables_initializer())
 
     #load saved params
-    shapes = json.load(open('model/params_shapes.json'))
-    offsets = np.cumsum([np.prod(shape) for shape in shapes])
-    init_params = [np.load('model/params_{}.npy'.format(n)) for n in range(10)]
-    init_params = np.split(np.concatenate(init_params, 0), offsets)[:-1]
-    init_params = [param.reshape(shape) for param, shape in zip(init_params, shapes)]
-    init_params[0] = init_params[0][:n_ctx]
-    init_params[0] = np.concatenate([init_params[1], (np.random.randn(n_special, n_embd)*0.02).astype(np.float32), init_params[0]], 0)
-    del init_params[1]
-
-    if n_transfer == -1:
-        n_transfer = 0
+    if args.params_path == 'model/params_shapes.json':
+        shapes = json.load(open(args.params_path))
+        offsets = np.cumsum([np.prod(shape) for shape in shapes])
+        init_params = [np.load('model/params_{}.npy'.format(n)) for n in range(10)]
+        init_params = np.split(np.concatenate(init_params, 0), offsets)[:-1]
+        init_params = [param.reshape(shape) for param, shape in zip(init_params, shapes)]
+        init_params[0] = init_params[0][:n_ctx]
+        init_params[0] = np.concatenate([init_params[1], (np.random.randn(n_special, n_embd)*0.02).astype(np.float32), init_params[0]], 0)
+        del init_params[1]
+        if n_transfer == -1:
+            n_transfer = 0
+        else:
+            n_transfer = 1+n_transfer*12
+        sess.run([p.assign(ip) for p, ip in zip(params[:n_transfer], init_params[:n_transfer])])
     else:
-        n_transfer = 1+n_transfer*12
-    sess.run([p.assign(ip) for p, ip in zip(params[:n_transfer], init_params[:n_transfer])])
+        obj = joblib.load(args.params_path)
+        #idk this is annoying
 
     #more setup
     eval_mgpu_logits, eval_mgpu_clf_losses, eval_mgpu_lm_losses = mgpu_predict(X_train, M_train, Y_train, dataset=args.dataset, ordinal=args.ordinal)
